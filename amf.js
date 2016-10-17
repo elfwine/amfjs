@@ -1,5 +1,6 @@
 /***
- * AMF 3 JavaScript library by Emil Malinov https://github.com/emilkm/amfjs
+ * AMF 3 JavaScript library originally created by Emil Malinov https://github.com/emilkm/amfjs
+ * Forked and revised by Alvin to support Vector data type (https://github.com/elfwine/amfjs)
  */
 var amf = {
 
@@ -19,6 +20,10 @@ var amf = {
         OBJECT_TYPE: 10,
         XMLSTRING_TYPE: 11,
         BYTEARRAY_TYPE: 12,
+        VECTOR_INT_TYPE: 13,
+        VECTOR_UINT_TYPE: 14,
+        VECTOR_DOUBLE_TYPE: 15,
+        VECTOR_OBJECT_TYPE: 16,
         AMF0_AMF3: 17,
         UINT29_MASK: 536870911,
         INT28_MAX_VALUE: 268435455,
@@ -239,6 +244,7 @@ amf.Client.prototype._send = function(xhr, request) {
                     && this.responseType == "arraybuffer"
                     && this.getResponseHeader("Content-type").indexOf("application/x-amf") > -1
                 ) {
+
                     var deserializer = new amf.Deserializer(new Uint8Array(this.response));
                     var message = deserializer.readMessage();
                     for (var bodyIndex in message.bodies) {
@@ -255,6 +261,11 @@ amf.Client.prototype._send = function(xhr, request) {
                             }
                         }
                     }
+                    /*
+                	var data = new AMF.parse(this.response);
+                	console.log("AMF DATA RESPONSE : ");
+                	console.log(data);
+                	request.onResult(data, request.token);*/
                     this.busy = false;
                     this.message = null;
                     if (!request.holdQueue) {
@@ -626,6 +637,14 @@ amf.Reader.prototype.readUnsignedShort = function() {
     return (c1 << 8) + (c2 << 0);
 };
 
+amf.Reader.prototype.readInt = function() {
+    var value = this.read();
+	value = (value << 8) | this.read();
+	value = (value << 8) | this.read();
+	value = (value << 8) | this.read();
+	return value;
+};
+
 amf.Reader.prototype.readUInt29 = function() {
     // Each byte must be treated as unsigned
     var b = this.read() & 255;
@@ -654,7 +673,9 @@ amf.Reader.prototype.readFully = function(buff, start, length) {
 };
 
 amf.Reader.prototype.readUTF = function(length) {
+	/*
     var utflen = length ? length : this.readUnsignedShort();
+
     var chararr = [];
     var p = this.pos;
     var c1, c2, c3;
@@ -674,6 +695,51 @@ amf.Reader.prototype.readUTF = function(length) {
     }
     // The number of chars produced may be less than utflen
     return chararr.join("");
+    */
+    var utflen = length ? length : this.readUnsignedShort();
+    var end = this.pos + utflen,
+    chars = [],
+    charCount = 0,
+    maxCharCount = 65535,
+    charArrayCount = 1,
+    result = [],
+    i = 0,
+    charArrays, byteCount, charCode;
+
+	charArrays = [chars];
+
+	while (this.pos < end) {
+	    charCode = this.read();
+	    if (charCode > 127) {
+	        if (charCode > 239) {
+	            byteCount = 4;
+	            charCode = (charCode & 0x07);
+	        } else if (charCode > 223) {
+	            byteCount = 3;
+	            charCode = (charCode & 0x0F);
+	        } else {
+	            byteCount = 2;
+	            charCode = (charCode & 0x1F);
+	        }
+	        while (--byteCount) {
+	            charCode = ((charCode << 6) | (this.read() & 0x3F));
+	        }
+	    }
+
+	    chars.push(charCode);
+	    if (++charCount === maxCharCount) {
+	        charArrays.push(chars = []);
+	        charCount = 0;
+	        charArrayCount++;
+	    }
+	}
+
+	for (; i < charArrayCount; i++) {
+	    result.push(String.fromCharCode.apply(String, charArrays[i]));
+	}
+
+	return result.join('');
+
 };
 
 amf.Reader.prototype.reset = function() {
@@ -727,7 +793,7 @@ amf.Reader.prototype.rememberObject = function(v) {
 };
 
 amf.Reader.prototype.readTraits = function(ref) {
-    if ((ref & 3) == 1) {
+	if ((ref & 0x02) == 0) { //if ((ref & 3) == 1) {
         return this.getTraits(ref >> 2);
     } else {
         var count = (ref >> 4);
@@ -740,6 +806,8 @@ amf.Reader.prototype.readTraits = function(ref) {
         for (var i = 0; i < count; i++) {
             traits.props.push(this.readString());
         }
+        traits.isExternalizable = ((ref & 4) == 4);
+        traits.isDynamic = ((ref & 8) == 8);
         this.rememberTraits(traits);
         return traits;
     }
@@ -756,19 +824,20 @@ amf.Reader.prototype.readScriptObject = function() {
             obj[amf.CONST.CLASS_ALIAS] = traits[amf.CONST.CLASS_ALIAS];
         }
         this.rememberObject(obj);
-        if ((ref & 4) == 4) {//externalizable
-            if (obj[amf.CONST.CLASS_ALIAS] == "flex.messaging.io.ArrayCollection"
+
+        if(traits.isExternalizable) {//externalizable
+        	if (obj[amf.CONST.CLASS_ALIAS] == "flex.messaging.io.ArrayCollection"
                 || obj[amf.CONST.CLASS_ALIAS] == "flex.messaging.io.ObjectProxy"
             ) {
                 return this.readObject();
             } else {
-                obj[amf.CONST.EXTERNALIZED_FIELD] = this.readObject();
+            	obj[amf.CONST.EXTERNALIZED_FIELD] = this.readObject();
             }
         } else {
             for (var i in traits.props) {
                 obj[traits.props[i]] = this.readObject();
             }
-            if ((ref & 8) == 8) {//dynamic
+            if(traits.isDynamic) {//dynamic
                 for (; ;) {
                     var name = this.readString();
                     if (name == null || name.length == 0) {
@@ -875,6 +944,55 @@ amf.Reader.prototype.readByteArray = function() {
     }
 };
 
+amf.Reader.prototype.readVectorInt = function() {
+    var ref = this.readUInt29();
+    if ((ref & 1) == 0) {
+        return this.getObject(ref >> 1);
+    }
+    this.readUInt29(); // Flag for Fixed.(Maybe)
+    var len = (ref >> 1);
+    var ba = [];
+    for(var n=0; n < len; n++) {
+    	ba[n] = this.readInt();
+    }
+    this.rememberObject(ba);
+    console.log("readVectorInt : " + ba);
+    return ba;
+};
+
+amf.Reader.prototype.readVectorDouble = function() {
+    var ref = this.readUInt29();
+    if ((ref & 1) == 0) {
+        return this.getObject(ref >> 1);
+    }
+    this.readUInt29(); // Flag for Fixed.(Maybe)
+    var len = (ref >> 1);
+    var ba = [];
+    for(var n=0; n < len; n++) {
+    	ba[n] = this.readDouble();
+    }
+    this.rememberObject(ba);
+    console.log("readVectorDouble : " + ba);
+    return ba;
+};
+
+amf.Reader.prototype.readVectorObject = function() {
+    var ref = this.readUInt29();
+    if ((ref & 1) == 0) {
+        return this.getObject(ref >> 1);
+    }
+    this.readUInt29(); // Flag for Fixed.(Maybe)
+    this.readString();
+    var len = (ref >> 1);
+    var ba = [];
+    for(var n=0; n < len; n++) {
+    	ba[n] = this.readObject();
+    }
+    this.rememberObject(ba);
+    console.log("readVectorObject : " + ba);
+    return ba;
+};
+
 amf.Reader.prototype.readObjectValue = function(type) {
     var value = null;
 
@@ -920,6 +1038,16 @@ amf.Reader.prototype.readObjectValue = function(type) {
         case amf.CONST.AMF0_AMF3:
             value = this.readObject();
             break;
+        case amf.CONST.VECTOR_INT_TYPE:
+        case amf.CONST.VECTOR_UINT_TYPE:
+        	value = this.readVectorInt();
+        	break;
+        case amf.CONST.VECTOR_DOUBLE_TYPE:
+        	value = this.readVectorDouble();
+        	break;
+        case amf.CONST.VECTOR_OBJECT_TYPE:
+        	value = this.readVectorObject();
+        	break;
         default:
             throw "Unknown AMF type: " + type;
     }
