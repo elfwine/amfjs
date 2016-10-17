@@ -261,11 +261,6 @@ amf.Client.prototype._send = function(xhr, request) {
                             }
                         }
                     }
-                    /*
-                	var data = new AMF.parse(this.response);
-                	console.log("AMF DATA RESPONSE : ");
-                	console.log(data);
-                	request.onResult(data, request.token);*/
                     this.busy = false;
                     this.message = null;
                     if (!request.holdQueue) {
@@ -956,7 +951,6 @@ amf.Reader.prototype.readVectorInt = function() {
     	ba[n] = this.readInt();
     }
     this.rememberObject(ba);
-    console.log("readVectorInt : " + ba);
     return ba;
 };
 
@@ -972,7 +966,6 @@ amf.Reader.prototype.readVectorDouble = function() {
     	ba[n] = this.readDouble();
     }
     this.rememberObject(ba);
-    console.log("readVectorDouble : " + ba);
     return ba;
 };
 
@@ -989,7 +982,6 @@ amf.Reader.prototype.readVectorObject = function() {
     	ba[n] = this.readObject();
     }
     this.rememberObject(ba);
-    console.log("readVectorObject : " + ba);
     return ba;
 };
 
